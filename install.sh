@@ -1,6 +1,6 @@
 #!/bin/sh
 # llmfit installer
-# Usage: curl -fsSL https://llmfit.axjns.dev | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/AlexsJones/llmfit/main/install.sh | sh
 #
 # Downloads the latest llmfit release from GitHub and installs
 # the binary to /usr/local/bin (or ~/.local/bin if no sudo).

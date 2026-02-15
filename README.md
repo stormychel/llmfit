@@ -13,7 +13,7 @@ Ships with an interactive TUI (default) and a classic CLI mode.
 ### Quick install
 
 ```sh
-curl -fsSL https://llmfit.axjns.dev | sh
+curl -fsSL https://raw.githubusercontent.com/AlexsJones/llmfit/main/install.sh | sh
 ```
 
 Downloads the latest release binary from GitHub and installs it to `/usr/local/bin` (or `~/.local/bin`).

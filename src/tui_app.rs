@@ -431,7 +431,10 @@ impl App {
                 }
             }
         } else if self.ollama_available {
-            let tag = providers::ollama_pull_tag(&fit.model.name);
+            let Some(tag) = providers::ollama_pull_tag(&fit.model.name) else {
+                self.pull_status = Some("Not available in Ollama".to_string());
+                return;
+            };
             let model_name = fit.model.name.clone();
             match self.ollama.start_pull(&tag) {
                 Ok(handle) => {
@@ -445,7 +448,7 @@ impl App {
                 }
             }
         } else {
-            self.pull_status = Some("Ollama is not running".to_string());
+            self.pull_status = Some("No provider available".to_string());
         }
     }
 

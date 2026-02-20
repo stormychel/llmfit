@@ -14,11 +14,43 @@ pub enum InputMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    Score,
+    Params,
+    MemPct,
+    Ctx,
+    UseCase,
+}
+
+impl SortColumn {
+    pub fn label(&self) -> &str {
+        match self {
+            SortColumn::Score => "Score",
+            SortColumn::Params => "Params",
+            SortColumn::MemPct => "Mem%",
+            SortColumn::Ctx => "Ctx",
+            SortColumn::UseCase => "Use",
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        match self {
+            SortColumn::Score => SortColumn::Params,
+            SortColumn::Params => SortColumn::MemPct,
+            SortColumn::MemPct => SortColumn::Ctx,
+            SortColumn::Ctx => SortColumn::UseCase,
+            SortColumn::UseCase => SortColumn::Score,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FitFilter {
     All,
     Perfect,
     Good,
     Marginal,
+    TooTight,
     Runnable, // Perfect + Good + Marginal (excludes TooTight)
 }
 
@@ -29,6 +61,7 @@ impl FitFilter {
             FitFilter::Perfect => "Perfect",
             FitFilter::Good => "Good",
             FitFilter::Marginal => "Marginal",
+            FitFilter::TooTight => "Too Tight",
             FitFilter::Runnable => "Runnable",
         }
     }
@@ -39,7 +72,8 @@ impl FitFilter {
             FitFilter::Runnable => FitFilter::Perfect,
             FitFilter::Perfect => FitFilter::Good,
             FitFilter::Good => FitFilter::Marginal,
-            FitFilter::Marginal => FitFilter::All,
+            FitFilter::Marginal => FitFilter::TooTight,
+            FitFilter::TooTight => FitFilter::All,
         }
     }
 }
@@ -60,6 +94,7 @@ pub struct App {
     // Filters
     pub fit_filter: FitFilter,
     pub installed_first: bool,
+    pub sort_column: SortColumn,
 
     // Table state
     pub selected_row: usize,
@@ -137,6 +172,7 @@ impl App {
             selected_providers,
             fit_filter: FitFilter::All,
             installed_first: false,
+            sort_column: SortColumn::Score,
             selected_row: 0,
             show_detail: false,
             provider_cursor: 0,
@@ -184,6 +220,7 @@ impl App {
                     FitFilter::Perfect => fit.fit_level == FitLevel::Perfect,
                     FitFilter::Good => fit.fit_level == FitLevel::Good,
                     FitFilter::Marginal => fit.fit_level == FitLevel::Marginal,
+                    FitFilter::TooTight => fit.fit_level == FitLevel::TooTight,
                     FitFilter::Runnable => fit.fit_level != FitLevel::TooTight,
                 };
 
@@ -241,6 +278,11 @@ impl App {
     pub fn cycle_fit_filter(&mut self) {
         self.fit_filter = self.fit_filter.next();
         self.apply_filters();
+    }
+
+    pub fn cycle_sort_column(&mut self) {
+        self.sort_column = self.sort_column.next();
+        self.re_sort();
     }
 
     pub fn enter_search(&mut self) {
@@ -325,10 +367,11 @@ impl App {
         self.re_sort();
     }
 
-    /// Re-sort all_fits using current installed_first preference, then refilter.
+    /// Re-sort all_fits using current sort column and installed_first preference, then refilter.
     fn re_sort(&mut self) {
         let fits = std::mem::take(&mut self.all_fits);
-        self.all_fits = crate::fit::rank_models_by_fit_opts(fits, self.installed_first);
+        self.all_fits =
+            crate::fit::rank_models_by_fit_opts_col(fits, self.installed_first, self.sort_column);
         self.apply_filters();
     }
 

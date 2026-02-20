@@ -12,7 +12,7 @@ use ratatui::{
 use crate::fit::FitLevel;
 use crate::hardware::is_running_in_wsl;
 use crate::providers;
-use crate::tui_app::{App, FitFilter, InputMode};
+use crate::tui_app::{App, FitFilter, InputMode, SortColumn};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let outer = Layout::default()
@@ -138,6 +138,7 @@ fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect) {
         .constraints([
             Constraint::Min(30),    // search
             Constraint::Length(24), // provider summary
+            Constraint::Length(18), // sort column
             Constraint::Length(20), // fit filter
         ])
         .split(area);
@@ -205,6 +206,20 @@ fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect) {
     .block(provider_block);
     frame.render_widget(providers, chunks[1]);
 
+    // Sort column
+    let sort_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(" Sort [s] ")
+        .title_style(Style::default().fg(Color::DarkGray));
+
+    let sort_text = Paragraph::new(Line::from(Span::styled(
+        format!(" {}", app.sort_column.label()),
+        Style::default().fg(Color::Cyan),
+    )))
+    .block(sort_block);
+    frame.render_widget(sort_text, chunks[2]);
+
     // Fit filter
     let fit_style = match app.fit_filter {
         FitFilter::All => Style::default().fg(Color::White),
@@ -212,6 +227,7 @@ fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect) {
         FitFilter::Perfect => Style::default().fg(Color::Green),
         FitFilter::Good => Style::default().fg(Color::Yellow),
         FitFilter::Marginal => Style::default().fg(Color::Magenta),
+        FitFilter::TooTight => Style::default().fg(Color::Red),
     };
 
     let fit_block = Block::default()
@@ -222,7 +238,7 @@ fn draw_search_and_filters(frame: &mut Frame, app: &App, area: Rect) {
 
     let fit_text = Paragraph::new(Line::from(Span::styled(app.fit_filter.label(), fit_style)))
         .block(fit_block);
-    frame.render_widget(fit_text, chunks[2]);
+    frame.render_widget(fit_text, chunks[3]);
 }
 
 fn fit_color(level: FitLevel) -> Color {
@@ -269,18 +285,37 @@ fn pull_indicator(percent: Option<f64>, tick: u64) -> String {
 }
 
 fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
-    let header_cells = [
+    let sort_col = app.sort_column;
+    let header_names = [
         "", "Inst", "Model", "Provider", "Params", "Score", "tok/s", "Quant", "Mode", "Mem %",
         "Ctx", "Fit", "Use Case",
-    ]
-    .iter()
-    .map(|h| {
-        Cell::from(*h).style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-    });
+    ];
+    // Column indices that correspond to each SortColumn variant
+    let sort_col_idx = match sort_col {
+        SortColumn::Score => 5,
+        SortColumn::Params => 4,
+        SortColumn::MemPct => 9,
+        SortColumn::Ctx => 10,
+        SortColumn::UseCase => 12,
+    };
+    let header_cells = header_names
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            if i == sort_col_idx {
+                Cell::from(format!("{} ▼", h)).style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Cell::from(*h).style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+            }
+        });
     let header = Row::new(header_cells).height(1);
 
     let rows: Vec<Row> = app
@@ -398,7 +433,7 @@ fn draw_table(frame: &mut Frame, app: &mut App, area: Rect) {
         )
         .row_highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Rgb(40, 40, 70))
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -844,7 +879,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
                 };
                 (
                     format!(
-                        " ↑↓/jk:nav  {}  /:search  f:fit{}  p:providers  q:quit",
+                        " ↑↓/jk:nav  {}  /:search  f:fit  s:sort{}  p:providers  q:quit",
                         detail_key, ollama_keys,
                     ),
                     "NORMAL",
@@ -912,7 +947,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             };
             (
                 format!(
-                    " ↑↓/jk:nav  {}  /:search  f:fit{}  p:providers  q:quit",
+                    " ↑↓/jk:nav  {}  /:search  f:fit  s:sort{}  p:providers  q:quit",
                     detail_key, ollama_keys,
                 ),
                 "NORMAL",

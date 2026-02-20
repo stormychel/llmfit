@@ -341,6 +341,19 @@ pub fn rank_models_by_fit(models: Vec<ModelFit>) -> Vec<ModelFit> {
 }
 
 pub fn rank_models_by_fit_opts(models: Vec<ModelFit>, installed_first: bool) -> Vec<ModelFit> {
+    rank_models_by_fit_opts_col(
+        models,
+        installed_first,
+        crate::tui_app::SortColumn::Score,
+    )
+}
+
+pub fn rank_models_by_fit_opts_col(
+    models: Vec<ModelFit>,
+    installed_first: bool,
+    sort_column: crate::tui_app::SortColumn,
+) -> Vec<ModelFit> {
+    use crate::tui_app::SortColumn;
     let mut ranked = models;
     ranked.sort_by(|a, b| {
         // Installed-first: if toggled, installed models sort above non-installed
@@ -351,8 +364,7 @@ pub fn rank_models_by_fit_opts(models: Vec<ModelFit>, installed_first: bool) -> 
             }
         }
 
-        // Primary: sort by composite score (higher is better)
-        // But TooTight always sorts last
+        // TooTight always sorts last regardless of column
         let a_runnable = a.fit_level != FitLevel::TooTight;
         let b_runnable = b.fit_level != FitLevel::TooTight;
 
@@ -362,10 +374,36 @@ pub fn rank_models_by_fit_opts(models: Vec<ModelFit>, installed_first: bool) -> 
             _ => {}
         }
 
-        // Within same runnability, sort by score descending
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+        // Sort by selected column
+        match sort_column {
+            SortColumn::Score => b
+                .score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            SortColumn::Params => {
+                let a_params = a.model.params_b();
+                let b_params = b.model.params_b();
+                b_params
+                    .partial_cmp(&a_params)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            }
+            SortColumn::MemPct => b
+                .utilization_pct
+                .partial_cmp(&a.utilization_pct)
+                .unwrap_or(std::cmp::Ordering::Equal),
+            SortColumn::Ctx => b.model.context_length.cmp(&a.model.context_length),
+            SortColumn::UseCase => {
+                let cmp = a.use_case.label().cmp(b.use_case.label());
+                if cmp == std::cmp::Ordering::Equal {
+                    // Secondary sort by score within same use case
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                } else {
+                    cmp
+                }
+            }
+        }
     });
     ranked
 }

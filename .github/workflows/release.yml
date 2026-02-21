@@ -92,8 +92,60 @@ jobs:
           name: ${{ env.ASSET }}
           path: ${{ env.ASSET_PATH }}
 
+  build-desktop:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Build Tauri app
+        run: cargo tauri build --target ${{ matrix.target }}
+        working-directory: llmfit-desktop
+
+      - name: Find and rename DMG
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          DMG=$(find target/${{ matrix.target }}/release/bundle/dmg -name '*.dmg' | head -1)
+          if [ -z "$DMG" ]; then
+            echo "No DMG found, checking for .app bundle..."
+            APP=$(find target/${{ matrix.target }}/release/bundle/macos -name '*.app' | head -1)
+            cd "$(dirname "$APP")"
+            tar czf "/tmp/llmfit-desktop-${TAG}-${{ matrix.target }}.app.tar.gz" "$(basename "$APP")"
+            echo "DESKTOP_ASSET=llmfit-desktop-${TAG}-${{ matrix.target }}.app.tar.gz" >> "$GITHUB_ENV"
+            echo "DESKTOP_ASSET_PATH=/tmp/llmfit-desktop-${TAG}-${{ matrix.target }}.app.tar.gz" >> "$GITHUB_ENV"
+          else
+            DEST="llmfit-desktop-${TAG}-${{ matrix.target }}.dmg"
+            cp "$DMG" "/tmp/${DEST}"
+            echo "DESKTOP_ASSET=${DEST}" >> "$GITHUB_ENV"
+            echo "DESKTOP_ASSET_PATH=/tmp/${DEST}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DESKTOP_ASSET }}
+          path: ${{ env.DESKTOP_ASSET_PATH }}
+
   release:
-    needs: build
+    needs: [build, build-desktop]
     runs-on: ubuntu-latest
 
     steps:
@@ -106,7 +158,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: artifacts/**/*.tar.gz
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.dmg
 
   publish-crate:
     needs: release

@@ -299,7 +299,8 @@ impl SystemSpecs {
                 && let Ok(vram_bytes) = vram_str.trim().parse::<u64>()
                 && vram_bytes > 0
             {
-                total_vram_bytes += vram_bytes;
+                // Track the maximum per-card VRAM instead of summing across all cards.
+                total_vram_bytes = total_vram_bytes.max(vram_bytes);
             }
 
             if let Ok(uevent) = std::fs::read_to_string(device_path.join("uevent")) {

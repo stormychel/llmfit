@@ -301,14 +301,12 @@ impl ModelProvider for MlxProvider {
             .timeout_global(Some(std::time::Duration::from_secs(2)))
             .build()
             .call()
+            && let Ok(json) = resp.into_body().read_json::<serde_json::Value>()
+            && let Some(data) = json.get("data").and_then(|d| d.as_array())
         {
-            if let Ok(json) = resp.into_body().read_json::<serde_json::Value>() {
-                if let Some(data) = json.get("data").and_then(|d| d.as_array()) {
-                    for model in data {
-                        if let Some(id) = model.get("id").and_then(|i| i.as_str()) {
-                            set.insert(id.to_lowercase());
-                        }
-                    }
+            for model in data {
+                if let Some(id) = model.get("id").and_then(|i| i.as_str()) {
+                    set.insert(id.to_lowercase());
                 }
             }
         }
@@ -359,7 +357,7 @@ impl ModelProvider for MlxProvider {
 /// Map a HuggingFace model name to mlx-community repo name candidates.
 /// Pattern: mlx-community/{RepoName}-{quant}bit
 pub fn hf_name_to_mlx_candidates(hf_name: &str) -> Vec<String> {
-    let repo = hf_name.split('/').last().unwrap_or(hf_name);
+    let repo = hf_name.split('/').next_back().unwrap_or(hf_name);
 
     // Explicit mappings: HF repo suffix → mlx-community repo name (without quant suffix)
     let mappings: &[(&str, &str)] = &[
@@ -447,10 +445,13 @@ pub fn mlx_pull_tag(hf_name: &str) -> String {
         .find(|c| c.ends_with("-4bit"))
         .cloned()
         .unwrap_or_else(|| {
-            candidates
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| hf_name.split('/').last().unwrap_or(hf_name).to_lowercase())
+            candidates.into_iter().next().unwrap_or_else(|| {
+                hf_name
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(hf_name)
+                    .to_lowercase()
+            })
         })
 }
 

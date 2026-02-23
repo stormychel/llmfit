@@ -116,8 +116,15 @@ impl SystemSpecs {
     fn detect_all_gpus(available_ram_gb: f64, cpu_name: &str) -> Vec<GpuInfo> {
         let mut gpus = Vec::new();
 
-        // NVIDIA GPUs via nvidia-smi
-        gpus.extend(Self::detect_nvidia_gpus());
+        // NVIDIA GPUs via nvidia-smi, with sysfs fallback for Linux/toolbox setups
+        let nvidia = Self::detect_nvidia_gpus();
+        if nvidia.is_empty() {
+            if let Some(nvidia_sysfs) = Self::detect_nvidia_gpu_sysfs_info() {
+                gpus.push(nvidia_sysfs);
+            }
+        } else {
+            gpus.extend(nvidia);
+        }
 
         // AMD GPUs via rocm-smi or sysfs
         if let Some(amd) = Self::detect_amd_gpu_rocm_info() {
@@ -253,6 +260,89 @@ impl SystemSpecs {
                 unified_memory: false,
             })
             .collect()
+    }
+
+    /// Detect NVIDIA GPUs via Linux sysfs when nvidia-smi is unavailable.
+    /// This is common in containerized environments (e.g. Toolbx) and
+    /// Nouveau-based systems.
+    fn detect_nvidia_gpu_sysfs_info() -> Option<GpuInfo> {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+
+        let entries = std::fs::read_dir("/sys/class/drm").ok()?;
+        let mut gpu_count: u32 = 0;
+        let mut total_vram_bytes: u64 = 0;
+        let mut slot_hints: Vec<String> = Vec::new();
+        let mut backend = GpuBackend::Vulkan;
+
+        for entry in entries.flatten() {
+            let card_path = entry.path();
+            let fname = card_path.file_name()?.to_str()?.to_string();
+            // Only look at cardN entries, not connectors (cardN-DP-1, etc.)
+            if !fname.starts_with("card") || fname.contains('-') {
+                continue;
+            }
+
+            let device_path = card_path.join("device");
+            let vendor_path = device_path.join("vendor");
+            let Ok(vendor) = std::fs::read_to_string(&vendor_path) else {
+                continue;
+            };
+            if vendor.trim() != "0x10de" {
+                continue;
+            }
+
+            gpu_count += 1;
+
+            if let Ok(vram_str) = std::fs::read_to_string(device_path.join("mem_info_vram_total"))
+                && let Ok(vram_bytes) = vram_str.trim().parse::<u64>()
+                && vram_bytes > 0
+            {
+                // Track the maximum per-card VRAM instead of summing across all cards.
+                total_vram_bytes = total_vram_bytes.max(vram_bytes);
+            }
+
+            if let Ok(uevent) = std::fs::read_to_string(device_path.join("uevent")) {
+                for line in uevent.lines() {
+                    if let Some(slot) = line.strip_prefix("PCI_SLOT_NAME=") {
+                        slot_hints.push(slot.to_string());
+                    } else if let Some(driver) = line.strip_prefix("DRIVER=")
+                        && driver.eq_ignore_ascii_case("nvidia")
+                    {
+                        backend = GpuBackend::Cuda;
+                    }
+                }
+            }
+        }
+
+        if gpu_count == 0 {
+            return None;
+        }
+
+        let name = Self::get_nvidia_gpu_name_lspci(&slot_hints)
+            .unwrap_or_else(|| "NVIDIA GPU".to_string());
+
+        let mut vram_gb = if total_vram_bytes > 0 {
+            Some(total_vram_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+        } else {
+            None
+        };
+
+        if vram_gb.is_none() {
+            let est = estimate_vram_from_name(&name);
+            if est > 0.0 {
+                vram_gb = Some(est);
+            }
+        }
+
+        Some(GpuInfo {
+            name,
+            vram_gb,
+            backend,
+            count: gpu_count,
+            unified_memory: false,
+        })
     }
 
     /// Detect AMD GPU via rocm-smi (available on Linux with ROCm installed).
@@ -406,32 +496,110 @@ impl SystemSpecs {
 
     /// Extract AMD GPU name from lspci output.
     fn get_amd_gpu_name_lspci() -> Option<String> {
-        let output = std::process::Command::new("lspci").output().ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        let text = String::from_utf8(output.stdout).ok()?;
+        let text = Self::lspci_output()?;
         for line in text.lines() {
             let lower = line.to_lowercase();
             // VGA compatible controller or 3D controller with AMD/ATI
             if (lower.contains("vga") || lower.contains("3d"))
                 && (lower.contains("amd") || lower.contains("ati"))
             {
-                // Extract the part after the colon, e.g. "Advanced Micro Devices ... [Radeon RX 5700 XT]"
-                if let Some(desc) = line.split("]:").last() {
-                    let desc: &str = desc.trim();
-                    // Try to extract the bracketed name like "[Radeon RX 5700 XT]"
-                    if let Some(start) = desc.rfind('[')
-                        && let Some(end) = desc.rfind(']')
-                        && start < end
-                    {
-                        return Some(desc[start + 1..end].to_string());
-                    }
-                    return Some(desc.to_string());
+                if let Some(model) = Self::extract_model_from_lspci_line(line) {
+                    return Some(model);
                 }
             }
         }
         None
+    }
+
+    /// Resolve NVIDIA GPU name from lspci, optionally prioritizing specific
+    /// PCI slots discovered from sysfs.
+    fn get_nvidia_gpu_name_lspci(slot_hints: &[String]) -> Option<String> {
+        let text = Self::lspci_output()?;
+
+        // First pass: match exact slot (e.g. "01:00.0"), if available.
+        for slot in slot_hints {
+            for line in text.lines() {
+                let lower = line.to_lowercase();
+                if line.starts_with(slot)
+                    && (lower.contains("vga") || lower.contains("3d") || lower.contains("display"))
+                    && lower.contains("nvidia")
+                {
+                    if let Some(model) = Self::extract_model_from_lspci_line(line) {
+                        return Some(model);
+                    }
+                }
+            }
+        }
+
+        // Fallback: any NVIDIA display controller line.
+        for line in text.lines() {
+            let lower = line.to_lowercase();
+            if (lower.contains("vga") || lower.contains("3d") || lower.contains("display"))
+                && lower.contains("nvidia")
+                && let Some(model) = Self::extract_model_from_lspci_line(line)
+            {
+                return Some(model);
+            }
+        }
+
+        None
+    }
+
+    /// Read lspci output, with host fallback for containerized environments.
+    fn lspci_output() -> Option<String> {
+        let local = std::process::Command::new("lspci")
+            .arg("-nn")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok());
+
+        if local.is_some() {
+            return local;
+        }
+
+        std::process::Command::new("flatpak-spawn")
+            .args(["--host", "lspci", "-nn"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+    }
+
+    /// Extract a likely model name from an lspci line.
+    /// Prefers human-readable bracketed tokens (e.g. "[GeForce RTX 2060]").
+    fn extract_model_from_lspci_line(line: &str) -> Option<String> {
+        let mut best: Option<String> = None;
+        let mut rest = line;
+
+        while let Some(start) = rest.find('[') {
+            let after = &rest[start + 1..];
+            let Some(end) = after.find(']') else { break };
+            let token = after[..end].trim();
+            let usable = !token.is_empty()
+                && !token.contains(':')
+                && !token.chars().all(|c| c.is_ascii_digit());
+
+            if usable
+                && best
+                    .as_ref()
+                    .map(|current| token.len() > current.len())
+                    .unwrap_or(true)
+            {
+                best = Some(token.to_string());
+            }
+
+            rest = &after[end + 1..];
+        }
+
+        if best.is_some() {
+            return best;
+        }
+
+        // Fallback: text after the first ": " separator.
+        line.split_once(": ")
+            .map(|(_, right)| right.trim().to_string())
+            .filter(|s| !s.is_empty())
     }
 
     /// Detect GPUs on Windows via WMI (Win32_VideoController).
@@ -614,10 +782,7 @@ impl SystemSpecs {
 
                 // For integrated Intel GPUs, check if it's an Arc-class device
                 // by looking for "Arc" in the device name via lspci
-                if let Ok(output) = std::process::Command::new("lspci").output()
-                    && output.status.success()
-                    && let Ok(text) = String::from_utf8(output.stdout)
-                {
+                if let Some(text) = Self::lspci_output() {
                     for line in text.lines() {
                         let lower = line.to_lowercase();
                         if lower.contains("intel") && lower.contains("arc") {
@@ -633,10 +798,7 @@ impl SystemSpecs {
 
         // Fallback: check lspci directly for Intel Arc devices
         // (covers cases where sysfs isn't available or card dirs don't exist)
-        if let Ok(output) = std::process::Command::new("lspci").output()
-            && output.status.success()
-            && let Ok(text) = String::from_utf8(output.stdout)
-        {
+        if let Some(text) = Self::lspci_output() {
             for line in text.lines() {
                 let lower = line.to_lowercase();
                 if lower.contains("intel") && lower.contains("arc") {

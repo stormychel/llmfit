@@ -641,6 +641,7 @@ fn estimate_tps(
         (GpuBackend::Sycl, _) => 100.0,
         (GpuBackend::CpuArm, _) => 90.0,
         (GpuBackend::CpuX86, _) => 70.0,
+        (GpuBackend::Ascend, _) => 390.0,
     };
 
     let params = model.params_b().max(0.1);

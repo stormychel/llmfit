@@ -102,6 +102,10 @@ pub struct App {
 
 impl App {
     pub fn with_specs(specs: SystemSpecs) -> Self {
+        Self::with_specs_and_context(specs, None)
+    }
+
+    pub fn with_specs_and_context(specs: SystemSpecs, context_limit: Option<u32>) -> Self {
         let db = ModelDatabase::new();
 
         // Detect Ollama
@@ -128,7 +132,7 @@ impl App {
             .get_all_models()
             .iter()
             .map(|m| {
-                let mut fit = ModelFit::analyze(m, &specs);
+                let mut fit = ModelFit::analyze_with_context_limit(m, &specs, context_limit);
                 fit.installed = providers::is_model_installed(&m.name, &ollama_installed)
                     || providers::is_model_installed_mlx(&m.name, &mlx_installed);
                 fit

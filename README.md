@@ -180,6 +180,21 @@ llmfit --memory=24G recommend --json
 
 Accepted suffixes: `G`/`GB`/`GiB` (gigabytes), `M`/`MB`/`MiB` (megabytes), `T`/`TB`/`TiB` (terabytes). Case-insensitive. If no GPU was detected, the override creates a synthetic GPU entry so models are scored for GPU inference.
 
+### Context-length cap for estimation
+
+Use `--max-context` to cap context length used for memory estimation (without changing each model's advertised maximum context):
+
+```sh
+# Estimate memory fit at 4K context
+llmfit --max-context 4096 --cli
+
+# Works with subcommands
+llmfit --max-context 8192 fit --perfect -n 5
+llmfit --max-context 16384 recommend --json --limit 5
+```
+
+If `--max-context` is not set, llmfit will use `OLLAMA_CONTEXT_LENGTH` when available.
+
 ### JSON output
 
 Add `--json` to any subcommand for machine-readable output:

@@ -37,6 +37,11 @@ struct Cli {
     /// Useful when GPU memory autodetection fails.
     #[arg(long, value_name = "SIZE")]
     memory: Option<String>,
+
+    /// Cap context length used for memory estimation (tokens).
+    /// Falls back to OLLAMA_CONTEXT_LENGTH if not set.
+    #[arg(long, value_name = "TOKENS", value_parser = clap::value_parser!(u32).range(1..))]
+    max_context: Option<u32>,
 }
 
 #[derive(Subcommand)]
@@ -113,7 +118,33 @@ fn detect_specs(memory_override: &Option<String>) -> SystemSpecs {
     }
 }
 
-fn run_fit(perfect: bool, limit: Option<usize>, json: bool, memory_override: &Option<String>) {
+fn resolve_context_limit(max_context: Option<u32>) -> Option<u32> {
+    if max_context.is_some() {
+        return max_context;
+    }
+
+    let Ok(raw) = std::env::var("OLLAMA_CONTEXT_LENGTH") else {
+        return None;
+    };
+    match raw.trim().parse::<u32>() {
+        Ok(v) if v > 0 => Some(v),
+        _ => {
+            eprintln!(
+                "Warning: could not parse OLLAMA_CONTEXT_LENGTH='{}'. Expected a positive integer.",
+                raw
+            );
+            None
+        }
+    }
+}
+
+fn run_fit(
+    perfect: bool,
+    limit: Option<usize>,
+    json: bool,
+    memory_override: &Option<String>,
+    context_limit: Option<u32>,
+) {
     let specs = detect_specs(memory_override);
     let db = ModelDatabase::new();
 
@@ -124,7 +155,7 @@ fn run_fit(perfect: bool, limit: Option<usize>, json: bool, memory_override: &Op
     let mut fits: Vec<ModelFit> = db
         .get_all_models()
         .iter()
-        .map(|m| ModelFit::analyze(m, &specs))
+        .map(|m| ModelFit::analyze_with_context_limit(m, &specs, context_limit))
         .collect();
 
     if perfect {
@@ -144,7 +175,7 @@ fn run_fit(perfect: bool, limit: Option<usize>, json: bool, memory_override: &Op
     }
 }
 
-fn run_tui(memory_override: &Option<String>) -> std::io::Result<()> {
+fn run_tui(memory_override: &Option<String>, context_limit: Option<u32>) -> std::io::Result<()> {
     // Setup terminal
     crossterm::terminal::enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -159,7 +190,7 @@ fn run_tui(memory_override: &Option<String>) -> std::io::Result<()> {
 
     // Create app state
     let specs = detect_specs(memory_override);
-    let mut app = tui_app::App::with_specs(specs);
+    let mut app = tui_app::App::with_specs_and_context(specs, context_limit);
 
     // Main loop
     loop {
@@ -193,6 +224,7 @@ fn run_recommend(
     runtime_filter: String,
     json: bool,
     memory_override: &Option<String>,
+    context_limit: Option<u32>,
 ) {
     let specs = detect_specs(memory_override);
     let db = ModelDatabase::new();
@@ -200,7 +232,7 @@ fn run_recommend(
     let mut fits: Vec<ModelFit> = db
         .get_all_models()
         .iter()
-        .map(|m| ModelFit::analyze(m, &specs))
+        .map(|m| ModelFit::analyze_with_context_limit(m, &specs, context_limit))
         .collect();
 
     // Filter by minimum fit level
@@ -261,6 +293,7 @@ fn run_recommend(
 
 fn main() {
     let cli = Cli::parse();
+    let context_limit = resolve_context_limit(cli.max_context);
 
     // If a subcommand is given, use classic CLI mode
     if let Some(command) = cli.command {
@@ -280,7 +313,7 @@ fn main() {
             }
 
             Commands::Fit { perfect, limit } => {
-                run_fit(perfect, limit, cli.json, &cli.memory);
+                run_fit(perfect, limit, cli.json, &cli.memory, context_limit);
             }
 
             Commands::Search { query } => {
@@ -307,7 +340,7 @@ fn main() {
                     return;
                 }
 
-                let fit = ModelFit::analyze(results[0], &specs);
+                let fit = ModelFit::analyze_with_context_limit(results[0], &specs, context_limit);
                 if cli.json {
                     display::display_json_fits(&specs, &[fit]);
                 } else {
@@ -322,7 +355,15 @@ fn main() {
                 runtime,
                 json,
             } => {
-                run_recommend(limit, use_case, min_fit, runtime, json, &cli.memory);
+                run_recommend(
+                    limit,
+                    use_case,
+                    min_fit,
+                    runtime,
+                    json,
+                    &cli.memory,
+                    context_limit,
+                );
             }
         }
         return;
@@ -330,12 +371,12 @@ fn main() {
 
     // If --cli flag, use classic fit output
     if cli.cli {
-        run_fit(cli.perfect, cli.limit, cli.json, &cli.memory);
+        run_fit(cli.perfect, cli.limit, cli.json, &cli.memory, context_limit);
         return;
     }
 
     // Default: launch TUI
-    if let Err(e) = run_tui(&cli.memory) {
+    if let Err(e) = run_tui(&cli.memory, context_limit) {
         eprintln!("Error running TUI: {}", e);
         std::process::exit(1);
     }

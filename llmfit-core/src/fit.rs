@@ -107,12 +107,29 @@ pub struct ModelFit {
 
 impl ModelFit {
     pub fn analyze(model: &LlmModel, system: &SystemSpecs) -> Self {
+        Self::analyze_with_context_limit(model, system, None)
+    }
+
+    pub fn analyze_with_context_limit(
+        model: &LlmModel,
+        system: &SystemSpecs,
+        context_limit: Option<u32>,
+    ) -> Self {
         let mut notes = Vec::new();
+        let estimation_ctx = context_limit
+            .map(|limit| limit.min(model.context_length))
+            .unwrap_or(model.context_length);
 
         let min_vram = model.min_vram_gb.unwrap_or(model.min_ram_gb);
         let use_case = UseCase::from_model(model);
         let default_mem_required =
-            model.estimate_memory_gb(model.quantization.as_str(), model.context_length);
+            model.estimate_memory_gb(model.quantization.as_str(), estimation_ctx);
+        if estimation_ctx < model.context_length {
+            notes.push(format!(
+                "Context capped for estimation: {} -> {} tokens",
+                model.context_length, estimation_ctx
+            ));
+        }
 
         // Determine inference runtime up front so path selection can use
         // the correct quantization hierarchy.
@@ -121,7 +138,8 @@ impl ModelFit {
         } else {
             InferenceRuntime::LlamaCpp
         };
-        let choose_quant = |budget: f64| best_quant_for_runtime_budget(model, runtime, budget);
+        let choose_quant =
+            |budget: f64| best_quant_for_runtime_budget(model, runtime, budget, estimation_ctx);
 
         // Step 1: pick the best available execution path
         // Step 2: score memory fit purely on headroom in that path's memory pool
@@ -147,7 +165,7 @@ impl ModelFit {
                         (RunMode::Gpu, default_mem_required, pool)
                     }
                 } else {
-                    cpu_path(model, system, runtime, &mut notes)
+                    cpu_path(model, system, runtime, estimation_ctx, &mut notes)
                 }
             } else if let Some(system_vram) = system.total_gpu_vram_gb {
                 // Use total VRAM across all same-model GPUs for fit scoring.
@@ -185,10 +203,10 @@ impl ModelFit {
             } else {
                 // GPU detected but VRAM unknown -- fall through to CPU
                 notes.push("GPU detected but VRAM unknown".to_string());
-                cpu_path(model, system, runtime, &mut notes)
+                cpu_path(model, system, runtime, estimation_ctx, &mut notes)
             }
         } else {
-            cpu_path(model, system, runtime, &mut notes)
+            cpu_path(model, system, runtime, estimation_ctx, &mut notes)
         };
 
         // Score fit purely on memory headroom (Perfect requires GPU)
@@ -229,11 +247,11 @@ impl ModelFit {
             models::QUANT_HIERARCHY
         };
         let (best_quant, _best_quant_mem) = model
-            .best_quant_for_budget_with(budget, model.context_length, hierarchy)
+            .best_quant_for_budget_with(budget, estimation_ctx, hierarchy)
             .or_else(|| {
                 // Fall back to GGUF hierarchy if MLX quants don't fit
                 if runtime == InferenceRuntime::Mlx {
-                    model.best_quant_for_budget(budget, model.context_length)
+                    model.best_quant_for_budget(budget, estimation_ctx)
                 } else {
                     None
                 }
@@ -391,6 +409,7 @@ fn cpu_path(
     model: &LlmModel,
     system: &SystemSpecs,
     runtime: InferenceRuntime,
+    estimation_ctx: u32,
     notes: &mut Vec<String>,
 ) -> (RunMode, f64, f64) {
     notes.push("CPU-only: model loaded into system RAM".to_string());
@@ -400,13 +419,13 @@ fn cpu_path(
     }
 
     if let Some((_, best_mem)) =
-        best_quant_for_runtime_budget(model, runtime, system.available_ram_gb)
+        best_quant_for_runtime_budget(model, runtime, system.available_ram_gb, estimation_ctx)
     {
         (RunMode::CpuOnly, best_mem, system.available_ram_gb)
     } else {
         (
             RunMode::CpuOnly,
-            model.estimate_memory_gb(model.quantization.as_str(), model.context_length),
+            model.estimate_memory_gb(model.quantization.as_str(), estimation_ctx),
             system.available_ram_gb,
         )
     }
@@ -513,6 +532,7 @@ fn best_quant_for_runtime_budget(
     model: &LlmModel,
     runtime: InferenceRuntime,
     budget: f64,
+    estimation_ctx: u32,
 ) -> Option<(&'static str, f64)> {
     let hierarchy: &[&str] = if runtime == InferenceRuntime::Mlx {
         models::MLX_QUANT_HIERARCHY
@@ -520,10 +540,10 @@ fn best_quant_for_runtime_budget(
         models::QUANT_HIERARCHY
     };
     model
-        .best_quant_for_budget_with(budget, model.context_length, hierarchy)
+        .best_quant_for_budget_with(budget, estimation_ctx, hierarchy)
         .or_else(|| {
             if runtime == InferenceRuntime::Mlx {
-                model.best_quant_for_budget(budget, model.context_length)
+                model.best_quant_for_budget(budget, estimation_ctx)
             } else {
                 None
             }
@@ -1317,6 +1337,24 @@ mod tests {
 
         let fit = ModelFit::analyze(&model, &system);
         assert_eq!(fit.runtime, InferenceRuntime::LlamaCpp);
+    }
+
+    #[test]
+    fn test_analyze_with_context_limit_reduces_memory_estimate() {
+        let mut model = test_model("7B", 4.0, Some(4.0));
+        model.context_length = 32768;
+        let system = test_system(32.0, true, Some(16.0));
+
+        let baseline = ModelFit::analyze(&model, &system);
+        let capped = ModelFit::analyze_with_context_limit(&model, &system, Some(4096));
+
+        assert!(capped.memory_required_gb < baseline.memory_required_gb);
+        assert!(
+            capped
+                .notes
+                .iter()
+                .any(|n| n.contains("Context capped for estimation"))
+        );
     }
 
     #[test]

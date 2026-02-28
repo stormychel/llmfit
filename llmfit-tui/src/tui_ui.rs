@@ -134,7 +134,7 @@ fn draw_system_bar(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeColors) {
         tc.muted
     };
 
-    let text = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" CPU: ", Style::default().fg(tc.muted)),
         Span::styled(
             format!(
@@ -162,7 +162,21 @@ fn draw_system_bar(frame: &mut Frame, app: &App, area: Rect, tc: &ThemeColors) {
         Span::styled(mlx_info, Style::default().fg(mlx_color)),
         Span::styled("  │  ", Style::default().fg(tc.muted)),
         Span::styled(llamacpp_info, Style::default().fg(llamacpp_color)),
-    ]);
+    ];
+
+    if app.backend_hidden_count > 0 {
+        spans.push(Span::styled("  │  ", Style::default().fg(tc.muted)));
+        spans.push(Span::styled(
+            format!(
+                "{} model{} hidden (incompatible backend)",
+                app.backend_hidden_count,
+                if app.backend_hidden_count == 1 { "" } else { "s" }
+            ),
+            Style::default().fg(tc.muted),
+        ));
+    }
+
+    let text = Line::from(spans);
 
     let block = Block::default()
         .borders(Borders::ALL)

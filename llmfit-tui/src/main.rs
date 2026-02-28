@@ -5,7 +5,7 @@ mod tui_events;
 mod tui_ui;
 
 use clap::{Parser, Subcommand};
-use llmfit_core::fit::ModelFit;
+use llmfit_core::fit::{backend_compatible, ModelFit};
 use llmfit_core::hardware::SystemSpecs;
 use llmfit_core::models::ModelDatabase;
 
@@ -206,9 +206,16 @@ fn run_fit(
         specs.display();
     }
 
+    let hidden: usize = db
+        .get_all_models()
+        .iter()
+        .filter(|m| !backend_compatible(m, &specs))
+        .count();
+
     let mut fits: Vec<ModelFit> = db
         .get_all_models()
         .iter()
+        .filter(|m| backend_compatible(m, &specs))
         .map(|m| ModelFit::analyze_with_context_limit(m, &specs, context_limit))
         .collect();
 
@@ -225,6 +232,13 @@ fn run_fit(
     if json {
         display::display_json_fits(&specs, &fits);
     } else {
+        if hidden > 0 {
+            eprintln!(
+                "({} model{} hidden — incompatible backend)",
+                hidden,
+                if hidden == 1 { "" } else { "s" }
+            );
+        }
         display::display_model_fits(&fits);
     }
 }
@@ -322,6 +336,7 @@ fn run_recommend(
     let mut fits: Vec<ModelFit> = db
         .get_all_models()
         .iter()
+        .filter(|m| backend_compatible(m, &specs))
         .map(|m| ModelFit::analyze_with_context_limit(m, &specs, context_limit))
         .collect();
 

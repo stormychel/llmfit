@@ -1,4 +1,4 @@
-use llmfit_core::fit::{FitLevel, ModelFit, SortColumn};
+use llmfit_core::fit::{backend_compatible, FitLevel, ModelFit, SortColumn};
 use llmfit_core::hardware::SystemSpecs;
 use llmfit_core::models::ModelDatabase;
 use llmfit_core::providers::{
@@ -143,6 +143,11 @@ pub struct App {
 
     // Theme
     pub theme: Theme,
+
+    /// How many models we silently dropped because they can't run on this
+    /// hardware — shown in the system bar so users aren't left wondering
+    /// why the list looks shorter than expected.
+    pub backend_hidden_count: usize,
 }
 
 impl App {
@@ -167,10 +172,18 @@ impl App {
         let llamacpp_available = llamacpp.is_available();
         let llamacpp_installed = llamacpp.installed_models();
 
-        // Analyze all models
+        // Track how many we're skipping so the UI can surface it.
+        let backend_hidden_count = db
+            .get_all_models()
+            .iter()
+            .filter(|m| !backend_compatible(m, &specs))
+            .count();
+
+        // Only analyze models that can actually run on this hardware.
         let mut all_fits: Vec<ModelFit> = db
             .get_all_models()
             .iter()
+            .filter(|m| backend_compatible(m, &specs))
             .map(|m| {
                 let mut fit = ModelFit::analyze_with_context_limit(m, &specs, context_limit);
                 fit.installed = providers::is_model_installed(&m.name, &ollama_installed)
@@ -239,6 +252,7 @@ impl App {
             tick_count: 0,
             confirm_download: false,
             theme: Theme::load(),
+            backend_hidden_count,
         };
 
         app.apply_filters();

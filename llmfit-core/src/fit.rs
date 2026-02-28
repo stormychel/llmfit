@@ -550,6 +550,15 @@ fn best_quant_for_runtime_budget(
         })
 }
 
+
+pub fn backend_compatible(model: &LlmModel, system: &SystemSpecs) -> bool {
+    if model.is_mlx_model() {
+        system.backend == GpuBackend::Metal && system.unified_memory
+    } else {
+        true
+    }
+}
+
 pub fn rank_models_by_fit(models: Vec<ModelFit>) -> Vec<ModelFit> {
     rank_models_by_fit_opts(models, false)
 }

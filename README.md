@@ -29,18 +29,6 @@ Windows users: see the **Install** section below.
 
 ![demo](demo.gif)
 
-Example of a medium performance home laptop
-
-![home](home_laptop.png)
-
-
-Example of models with Mixture-of-Experts architectures
-
-![moe](moe.png)
-
-Downloading a model via Ollama integration
-
-![download](download.gif)
 ---
 
 ## Install

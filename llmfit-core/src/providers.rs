@@ -613,20 +613,39 @@ impl LlamaCppProvider {
     /// `repo_id` is e.g. "bartowski/Llama-3.1-8B-Instruct-GGUF"
     /// `filename` is e.g. "Llama-3.1-8B-Instruct-Q4_K_M.gguf"
     pub fn download_gguf(&self, repo_id: &str, filename: &str) -> Result<PullHandle, String> {
+        // Sanitize filename to prevent path traversal (security: issue #127)
+        validate_gguf_filename(filename)?;
+
         let models_dir = self.models_dir.clone();
         let url = format!(
             "https://huggingface.co/{}/resolve/main/{}",
             repo_id, filename
         );
         let dest_path = models_dir.join(filename);
+
+        // Final safety check: ensure resolved path stays within models_dir
+        if let (Ok(canonical_dir), Ok(canonical_dest)) = (
+            std::fs::create_dir_all(&models_dir).and_then(|_| models_dir.canonicalize()),
+            // dest may not exist yet, so canonicalize the parent
+            dest_path
+                .parent()
+                .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no parent"))
+                .and_then(|p| {
+                    std::fs::create_dir_all(p)?;
+                    p.canonicalize()
+                }),
+        ) {
+            if !canonical_dest.starts_with(&canonical_dir) {
+                return Err(format!(
+                    "Security: download path escapes cache directory: {}",
+                    dest_path.display()
+                ));
+            }
+        }
+
         let tag = format!("{}/{}", repo_id, filename);
         let filename_owned = filename.to_string();
         let (tx, rx) = std::sync::mpsc::channel();
-
-        // Ensure cache directory exists
-        if let Err(e) = std::fs::create_dir_all(&models_dir) {
-            return Err(format!("Failed to create models directory: {}", e));
-        }
 
         std::thread::spawn(move || {
             let _ = tx.send(PullEvent::Progress {
@@ -751,6 +770,57 @@ impl LlamaCppProvider {
 }
 
 /// Check if a filename looks like a split GGUF shard (e.g., model-00001-of-00003.gguf).
+/// Validate a GGUF filename to prevent path traversal attacks.
+///
+/// Rejects:
+/// - Empty filenames
+/// - Absolute paths
+/// - Path traversal components (`..`)
+/// - Filenames that don't end in `.gguf` or `.gguf.part`
+/// - Filenames containing path separators (subdirectory attempts)
+fn validate_gguf_filename(filename: &str) -> Result<(), String> {
+    if filename.is_empty() {
+        return Err("GGUF filename must not be empty".to_string());
+    }
+
+    let path = std::path::Path::new(filename);
+
+    if path.is_absolute() {
+        return Err(format!(
+            "Security: absolute paths not allowed in GGUF filename: {}",
+            filename
+        ));
+    }
+
+    // Reject any path component that is ".."
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(format!(
+                "Security: path traversal not allowed in GGUF filename: {}",
+                filename
+            ));
+        }
+    }
+
+    // Must end in .gguf
+    if !filename.ends_with(".gguf") {
+        return Err(format!(
+            "GGUF filename must end in .gguf, got: {}",
+            filename
+        ));
+    }
+
+    // Reject path separators (no subdirectories)
+    if filename.contains('/') || filename.contains('\\') {
+        return Err(format!(
+            "Security: path separators not allowed in GGUF filename: {}",
+            filename
+        ));
+    }
+
+    Ok(())
+}
+
 fn is_split_file(filename: &str) -> bool {
     // Pattern: anything with "-NNNNN-of-NNNNN" before .gguf
     filename.contains("-of-")
@@ -1493,5 +1563,40 @@ mod tests {
         let candidates =
             hf_name_to_ollama_candidates("deepseek-ai/DeepSeek-Coder-V2-Lite-Instruct");
         assert!(candidates.contains(&"deepseek-coder-v2:16b".to_string()));
+    }
+
+    #[test]
+    fn test_validate_gguf_filename_valid() {
+        assert!(validate_gguf_filename("Llama-3.1-8B-Q4_K_M.gguf").is_ok());
+        assert!(validate_gguf_filename("model.gguf").is_ok());
+    }
+
+    #[test]
+    fn test_validate_gguf_filename_traversal() {
+        assert!(validate_gguf_filename("../../outside.gguf").is_err());
+        assert!(validate_gguf_filename("../evil.gguf").is_err());
+        assert!(validate_gguf_filename("foo/../bar.gguf").is_err());
+    }
+
+    #[test]
+    fn test_validate_gguf_filename_absolute() {
+        assert!(validate_gguf_filename("/etc/passwd").is_err());
+        assert!(validate_gguf_filename("/tmp/model.gguf").is_err());
+    }
+
+    #[test]
+    fn test_validate_gguf_filename_bad_extension() {
+        assert!(validate_gguf_filename("malware.exe").is_err());
+        assert!(validate_gguf_filename("script.sh").is_err());
+    }
+
+    #[test]
+    fn test_validate_gguf_filename_empty() {
+        assert!(validate_gguf_filename("").is_err());
+    }
+
+    #[test]
+    fn test_validate_gguf_filename_subdirectory() {
+        assert!(validate_gguf_filename("subdir/model.gguf").is_err());
     }
 }

@@ -1886,17 +1886,23 @@ mod tests {
         // Use a model without a hardcoded mapping to test heuristic generation
         let candidates = hf_name_to_gguf_candidates("SomeOrg/Cool-Model-7B");
         assert!(
-            candidates.iter().any(|c| c == "bartowski/Cool-Model-7B-GGUF"),
+            candidates
+                .iter()
+                .any(|c| c == "bartowski/Cool-Model-7B-GGUF"),
             "Should generate bartowski candidate, got: {:?}",
             candidates
         );
         assert!(
-            candidates.iter().any(|c| c == "ggml-org/Cool-Model-7B-GGUF"),
+            candidates
+                .iter()
+                .any(|c| c == "ggml-org/Cool-Model-7B-GGUF"),
             "Should generate ggml-org candidate, got: {:?}",
             candidates
         );
         assert!(
-            candidates.iter().any(|c| c == "TheBloke/Cool-Model-7B-GGUF"),
+            candidates
+                .iter()
+                .any(|c| c == "TheBloke/Cool-Model-7B-GGUF"),
             "Should generate TheBloke candidate, got: {:?}",
             candidates
         );

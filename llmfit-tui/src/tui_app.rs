@@ -1239,8 +1239,7 @@ impl App {
             let has_ollama = ollama_runtime_available && providers::has_ollama_mapping(&model_name);
             let has_llamacpp = if llamacpp_available {
                 // Use catalog data when available to skip slow HTTP probes
-                has_catalog_gguf
-                    || providers::first_existing_gguf_repo(&model_name).is_some()
+                has_catalog_gguf || providers::first_existing_gguf_repo(&model_name).is_some()
             } else {
                 false
             };

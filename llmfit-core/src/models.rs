@@ -1156,11 +1156,7 @@ mod tests {
         ];
         for name in &expected_with_gguf {
             let model = db.get_all_models().iter().find(|m| m.name == *name);
-            assert!(
-                model.is_some(),
-                "Model {} should exist in catalog",
-                name
-            );
+            assert!(model.is_some(), "Model {} should exist in catalog", name);
             let model = model.unwrap();
             assert!(
                 !model.gguf_sources.is_empty(),

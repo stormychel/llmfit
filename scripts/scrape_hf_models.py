@@ -504,7 +504,7 @@ def extract_provider(repo_id: str) -> str:
     return mapping.get(org, org)
 
 
-def infer_capabilities(repo_id: str, pipeline_tag: str | None, use_case: str) -> list[str]:
+def infer_capabilities(repo_id: str, pipeline_tag: str | None, use_case: str, config: dict | None = None) -> list[str]:
     """Infer model capabilities like vision and tool use."""
     caps: list[str] = []
     rid = repo_id.lower()
@@ -524,17 +524,15 @@ def infer_capabilities(repo_id: str, pipeline_tag: str | None, use_case: str) ->
     ):
         caps.append("vision")
 
-    # Tool use (known families)
-    if (
-        "tool" in uc
-        or "function call" in uc
-        or "qwen3" in rid
-        or "qwen2.5" in rid
-        or "command-r" in rid
-        or ("llama-3" in rid and "instruct" in rid)
-        or ("mistral" in rid and "instruct" in rid)
-        or "hermes" in rid
-    ):
+    # Tool use — check chat_template for "tools" mention
+    chat_template = None
+    if config:
+        chat_template = (
+            config.get("chat_template_jinja")
+            or (config.get("processor_config") or {}).get("chat_template")
+            or (config.get("tokenizer_config") or {}).get("chat_template")
+        )
+    if chat_template and "tools" in chat_template:
         caps.append("tool_use")
 
     return caps
@@ -661,7 +659,7 @@ def scrape_model(repo_id: str) -> dict | None:
         "format": model_format,
         "context_length": context_length,
         "use_case": use_case_str,
-        "capabilities": infer_capabilities(repo_id, pipeline_tag, use_case_str),
+        "capabilities": infer_capabilities(repo_id, pipeline_tag, use_case_str, config),
         "pipeline_tag": pipeline_tag or "unknown",
         "architecture": architecture,
         "hf_downloads": info.get("downloads", 0),

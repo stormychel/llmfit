@@ -3916,26 +3916,28 @@ fn draw_filter_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
     )));
 
     let is_min = app.filter_field == FilterPopupField::ParamsMin;
-    let min_val = if app.filter_params_min_input.is_empty() {
+    let min_val = if app.filter_params_min_input.is_empty() && !is_min {
         "any".to_string()
     } else {
         app.filter_params_min_input.clone()
     };
     lines.push(Line::from(vec![
-        Span::styled("    Min:", label_style(is_min)),
-        Span::styled(format!(" {:>12}", min_val), value_style(is_min)),
+        Span::styled("    Min: ", label_style(is_min)),
+        Span::styled(format!("{:<12}", min_val), value_style(is_min)),
     ]));
 
     let is_max = app.filter_field == FilterPopupField::ParamsMax;
-    let max_val = if app.filter_params_max_input.is_empty() {
+    let max_val = if app.filter_params_max_input.is_empty() && !is_max {
         "any".to_string()
     } else {
         app.filter_params_max_input.clone()
     };
     lines.push(Line::from(vec![
-        Span::styled("    Max:", label_style(is_max)),
-        Span::styled(format!(" {:>12}", max_val), value_style(is_max)),
+        Span::styled("    Max: ", label_style(is_max)),
+        Span::styled(format!("{:<12}", max_val), value_style(is_max)),
     ]));
+
+    lines.push(Line::from(""));
 
     // Memory Usage (%)
     lines.push(Line::from(Span::styled(
@@ -3944,26 +3946,32 @@ fn draw_filter_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
     )));
 
     let is_mem_min = app.filter_field == FilterPopupField::MemPctMin;
-    let mem_min_val = if app.filter_mem_pct_min_input.is_empty() {
+    let mem_min_val = if app.filter_mem_pct_min_input.is_empty() && !is_mem_min {
         "any".to_string()
+    } else if app.filter_mem_pct_min_input.is_empty() {
+        String::new()
     } else {
         format!("{}%", app.filter_mem_pct_min_input)
     };
     lines.push(Line::from(vec![
-        Span::styled("    Min:", label_style(is_mem_min)),
-        Span::styled(format!(" {:>12}", mem_min_val), value_style(is_mem_min)),
+        Span::styled("    Min: ", label_style(is_mem_min)),
+        Span::styled(format!("{:<12}", mem_min_val), value_style(is_mem_min)),
     ]));
 
     let is_mem_max = app.filter_field == FilterPopupField::MemPctMax;
-    let mem_max_val = if app.filter_mem_pct_max_input.is_empty() {
+    let mem_max_val = if app.filter_mem_pct_max_input.is_empty() && !is_mem_max {
         "any".to_string()
+    } else if app.filter_mem_pct_max_input.is_empty() {
+        String::new()
     } else {
         format!("{}%", app.filter_mem_pct_max_input)
     };
     lines.push(Line::from(vec![
-        Span::styled("    Max:", label_style(is_mem_max)),
-        Span::styled(format!(" {:>12}", mem_max_val), value_style(is_mem_max)),
+        Span::styled("    Max: ", label_style(is_mem_max)),
+        Span::styled(format!("{:<12}", mem_max_val), value_style(is_mem_max)),
     ]));
+
+    lines.push(Line::from(""));
 
     // Sort Direction
     lines.push(Line::from(Span::styled(
@@ -3986,6 +3994,8 @@ fn draw_filter_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
         Span::styled("    Direction:", label_style(is_sort)),
         Span::styled(format!(" {:>12}", dir_text), sort_val_style),
     ]));
+
+    lines.push(Line::from(""));
 
     // Fit Filter
     lines.push(Line::from(Span::styled(
@@ -4022,17 +4032,23 @@ fn draw_filter_popup(frame: &mut Frame, app: &App, tc: &ThemeColors) {
     frame.render_widget(paragraph, inner);
 
     // Draw cursor for text input fields
+    // Row offsets account for section headers and blank separator lines:
+    //  0: "Parameters (B):"    1: Min  2: Max  3: (blank)
+    //  4: "Memory Usage (%):"  5: Min  6: Max  7: (blank)
+    //  8: "Sort:"              9: Direction     10: (blank)
+    // 11: "Fit Filter:"       12: Fit
     let field_row: u16 = match app.filter_field {
         FilterPopupField::ParamsMin => 1,
         FilterPopupField::ParamsMax => 2,
-        FilterPopupField::MemPctMin => 4,
-        FilterPopupField::MemPctMax => 5,
-        FilterPopupField::SortDirection => 7,
-        FilterPopupField::FitFilter => 9,
+        FilterPopupField::MemPctMin => 5,
+        FilterPopupField::MemPctMax => 6,
+        FilterPopupField::SortDirection => 9,
+        FilterPopupField::FitFilter => 12,
     };
 
-    let label_width: u16 = 14;
-    let cursor_x = inner.x + label_width + app.filter_cursor_position as u16 + 1;
+    // "    Min: " / "    Max: " = 9 chars label
+    let label_width: u16 = 9;
+    let cursor_x = inner.x + label_width + app.filter_cursor_position as u16;
     let cursor_y = inner.y + field_row;
     if cursor_x < inner.x + inner.width {
         frame.set_cursor_position((cursor_x, cursor_y));

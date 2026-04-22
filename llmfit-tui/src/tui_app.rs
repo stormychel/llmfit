@@ -72,6 +72,17 @@ impl FilterPopupField {
     }
 }
 
+/// Snapshot of filter state captured on popup open, restored on Esc.
+#[derive(Debug, Clone)]
+struct FilterSnapshot {
+    params_min: String,
+    params_max: String,
+    mem_pct_min: String,
+    mem_pct_max: String,
+    sort_ascending: bool,
+    fit_filter: FitFilter,
+}
+
 /// Fields in the Advanced Configuration modal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AdvConfigField {
@@ -544,6 +555,9 @@ pub struct App {
     pub filter_mem_pct_max_input: String,
     pub filter_sort_ascending: bool,
 
+    // Snapshot of filter state when popup is opened — restored on Esc.
+    filter_snapshot: Option<FilterSnapshot>,
+
     /// How many models we silently dropped because they can't run on this
     /// hardware — shown in the system bar so users aren't left wondering
     /// why the list looks shorter than expected.
@@ -893,6 +907,7 @@ impl App {
             filter_mem_pct_min_input: String::new(),
             filter_mem_pct_max_input: String::new(),
             filter_sort_ascending: sort_ascending,
+            filter_snapshot: None,
         };
 
         // Restore persisted range filters
@@ -2361,6 +2376,14 @@ impl App {
     // ── Filter Popup ─────────────────────────────────────────────
 
     pub fn open_filter_popup(&mut self) {
+        self.filter_snapshot = Some(FilterSnapshot {
+            params_min: self.filter_params_min_input.clone(),
+            params_max: self.filter_params_max_input.clone(),
+            mem_pct_min: self.filter_mem_pct_min_input.clone(),
+            mem_pct_max: self.filter_mem_pct_max_input.clone(),
+            sort_ascending: self.sort_ascending,
+            fit_filter: self.fit_filter,
+        });
         self.filter_field = FilterPopupField::ParamsMin;
         self.filter_cursor_position = self.filter_params_min_input.len();
         self.filter_sort_ascending = self.sort_ascending;
@@ -2368,6 +2391,14 @@ impl App {
     }
 
     pub fn close_filter_popup(&mut self) {
+        if let Some(snap) = self.filter_snapshot.take() {
+            self.filter_params_min_input = snap.params_min;
+            self.filter_params_max_input = snap.params_max;
+            self.filter_mem_pct_min_input = snap.mem_pct_min;
+            self.filter_mem_pct_max_input = snap.mem_pct_max;
+            self.sort_ascending = snap.sort_ascending;
+            self.fit_filter = snap.fit_filter;
+        }
         self.input_mode = InputMode::Normal;
     }
 
@@ -2383,13 +2414,16 @@ impl App {
 
     pub fn filter_input(&mut self, c: char) {
         match self.filter_field {
-            FilterPopupField::ParamsMin | FilterPopupField::ParamsMax => {
-                let buf = match self.filter_field {
-                    FilterPopupField::ParamsMin => &self.filter_params_min_input,
-                    FilterPopupField::ParamsMax => &self.filter_params_max_input,
-                    _ => "",
-                };
-                if c == '.' && buf.contains('.') {
+            FilterPopupField::ParamsMin => {
+                if c == '.' && self.filter_params_min_input.contains('.') {
+                    return;
+                }
+                if !c.is_ascii_digit() && c != '.' {
+                    return;
+                }
+            }
+            FilterPopupField::ParamsMax => {
+                if c == '.' && self.filter_params_max_input.contains('.') {
                     return;
                 }
                 if !c.is_ascii_digit() && c != '.' {
@@ -2404,14 +2438,7 @@ impl App {
             _ => return,
         }
         let pos = self.filter_cursor_position;
-        let buf = match self.filter_field {
-            FilterPopupField::ParamsMin => &mut self.filter_params_min_input,
-            FilterPopupField::ParamsMax => &mut self.filter_params_max_input,
-            FilterPopupField::MemPctMin => &mut self.filter_mem_pct_min_input,
-            FilterPopupField::MemPctMax => &mut self.filter_mem_pct_max_input,
-            _ => unreachable!(),
-        };
-        buf.insert(pos, c);
+        self.active_filter_input_mut().insert(pos, c);
         self.filter_cursor_position += 1;
     }
 
@@ -2421,42 +2448,14 @@ impl App {
         }
         self.filter_cursor_position -= 1;
         let pos = self.filter_cursor_position;
-        match self.filter_field {
-            FilterPopupField::ParamsMin => {
-                self.filter_params_min_input.remove(pos);
-            }
-            FilterPopupField::ParamsMax => {
-                self.filter_params_max_input.remove(pos);
-            }
-            FilterPopupField::MemPctMin => {
-                self.filter_mem_pct_min_input.remove(pos);
-            }
-            FilterPopupField::MemPctMax => {
-                self.filter_mem_pct_max_input.remove(pos);
-            }
-            _ => {}
-        }
+        self.active_filter_input_mut().remove(pos);
     }
 
     pub fn filter_delete(&mut self) {
         let len = self.active_filter_input_len();
         if self.filter_cursor_position < len {
             let pos = self.filter_cursor_position;
-            match self.filter_field {
-                FilterPopupField::ParamsMin => {
-                    self.filter_params_min_input.remove(pos);
-                }
-                FilterPopupField::ParamsMax => {
-                    self.filter_params_max_input.remove(pos);
-                }
-                FilterPopupField::MemPctMin => {
-                    self.filter_mem_pct_min_input.remove(pos);
-                }
-                FilterPopupField::MemPctMax => {
-                    self.filter_mem_pct_max_input.remove(pos);
-                }
-                _ => {}
-            }
+            self.active_filter_input_mut().remove(pos);
         }
     }
 
@@ -2468,6 +2467,23 @@ impl App {
             FilterPopupField::MemPctMax => self.filter_mem_pct_max_input.len(),
             FilterPopupField::SortDirection | FilterPopupField::FitFilter => 0,
         }
+    }
+
+    fn active_filter_input_mut(&mut self) -> &mut String {
+        match self.filter_field {
+            FilterPopupField::ParamsMin => &mut self.filter_params_min_input,
+            FilterPopupField::ParamsMax => &mut self.filter_params_max_input,
+            FilterPopupField::MemPctMin => &mut self.filter_mem_pct_min_input,
+            FilterPopupField::MemPctMax => &mut self.filter_mem_pct_max_input,
+            FilterPopupField::SortDirection | FilterPopupField::FitFilter => {
+                unreachable!("no text input for toggle fields")
+            }
+        }
+    }
+
+    pub fn filter_clear_active_input(&mut self) {
+        self.active_filter_input_mut().clear();
+        self.filter_cursor_position = 0;
     }
 
     pub fn filter_cursor_left(&mut self) {
@@ -2492,7 +2508,9 @@ impl App {
     }
 
     pub fn apply_filter_popup(&mut self) {
+        self.filter_snapshot = None;
         self.sort_ascending = self.filter_sort_ascending;
+        self.apply_filters();
         self.re_sort();
         self.save_filters();
         self.input_mode = InputMode::Normal;

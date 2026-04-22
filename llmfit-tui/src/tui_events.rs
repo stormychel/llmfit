@@ -558,8 +558,8 @@ fn handle_filter_popup_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => app.apply_filter_popup(),
 
         // Field navigation
-        KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => app.filter_next_field(),
-        KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => app.filter_prev_field(),
+        KeyCode::Tab | KeyCode::Down => app.filter_next_field(),
+        KeyCode::BackTab | KeyCode::Up => app.filter_prev_field(),
 
         // Cursor movement within field
         KeyCode::Left => app.filter_cursor_left(),
@@ -569,15 +569,14 @@ fn handle_filter_popup_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Backspace => app.filter_backspace(),
         KeyCode::Delete => app.filter_delete(),
         KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            let input = match app.filter_field {
-                crate::tui_app::FilterPopupField::ParamsMin => &mut app.filter_params_min_input,
-                crate::tui_app::FilterPopupField::ParamsMax => &mut app.filter_params_max_input,
-                crate::tui_app::FilterPopupField::MemPctMin => &mut app.filter_mem_pct_min_input,
-                crate::tui_app::FilterPopupField::MemPctMax => &mut app.filter_mem_pct_max_input,
-                _ => return,
-            };
-            input.clear();
-            app.filter_cursor_position = 0;
+            if matches!(
+                app.filter_field,
+                crate::tui_app::FilterPopupField::SortDirection
+                    | crate::tui_app::FilterPopupField::FitFilter
+            ) {
+                return;
+            }
+            app.filter_clear_active_input();
         }
 
         // Sort direction toggle
